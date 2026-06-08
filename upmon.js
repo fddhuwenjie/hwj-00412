@@ -11,6 +11,10 @@ const reporter = require('./lib/reporter');
 const configManager = require('./lib/config');
 const sampleData = require('./lib/sampleData');
 const alertManager = require('./lib/alerts');
+const webhookManager = require('./lib/webhook');
+const incidentManager = require('./lib/incident');
+const statusPage = require('./lib/statusPage');
+const transactionManager = require('./lib/transaction');
 
 const program = new Command();
 
@@ -221,12 +225,15 @@ program
   .option('-o, --output <file>', '输出文件路径(HTML格式)')
   .option('-e, --environment <env>', '只生成指定环境的报告')
   .option('-t, --target <id>', '只生成指定目标的报告(ID或名称)')
+  .option('--transaction', '生成事务监测报告')
   .action(async (options) => {
     try {
       await db.init();
       
       let result;
-      if (options.target) {
+      if (options.transaction) {
+        result = await reporter.generateTransactionReport(options.format, options.output);
+      } else if (options.target) {
         let target;
         if (/^\d+$/.test(options.target)) {
           target = await db.getTargetById(parseInt(options.target));
@@ -335,6 +342,399 @@ program
       process.exit(1);
     }
   });
+
+const webhookCmd = program
+  .command('webhook')
+  .description('Webhook通知渠道管理');
+
+webhookCmd
+  .command('add')
+  .description('添加Webhook通知渠道')
+  .requiredOption('-n, --name <name>', 'Webhook名称')
+  .requiredOption('-u, --url <url>', 'Webhook URL')
+  .option('-s, --secret <secret>', '签名密钥')
+  .option('--disable-failure-notify', '禁用失败通知')
+  .option('--disable-recovery-notify', '禁用恢复通知')
+  .option('--disabled', '创建时禁用')
+  .action(async (options) => {
+    try {
+      await db.init();
+      await webhookManager.add({
+        ...options,
+        notify_on_failure: !options.disable_failure_notify,
+        notify_on_recovery: !options.disable_recovery_notify,
+        enabled: !options.disabled
+      });
+      await db.close();
+    } catch (err) {
+      console.error(chalk.red('✗ 添加失败:'), err.message);
+      process.exit(1);
+    }
+  });
+
+webhookCmd
+  .command('list')
+  .description('列出所有Webhook配置')
+  .option('-d, --details', '显示详细信息和发送日志')
+  .action(async (options) => {
+    try {
+      await db.init();
+      await webhookManager.list(options.details);
+      await db.close();
+    } catch (err) {
+      console.error(chalk.red('✗ 查询失败:'), err.message);
+      process.exit(1);
+    }
+  });
+
+webhookCmd
+  .command('remove <webhook>')
+  .description('删除Webhook配置(ID或名称)')
+  .action(async (webhook) => {
+    try {
+      await db.init();
+      await webhookManager.remove(webhook);
+      await db.close();
+    } catch (err) {
+      console.error(chalk.red('✗ 删除失败:'), err.message);
+      process.exit(1);
+    }
+  });
+
+webhookCmd
+  .command('test <webhook>')
+  .description('发送测试通知验证Webhook连通性')
+  .action(async (webhook) => {
+    try {
+      await db.init();
+      await webhookManager.test(webhook);
+      await db.close();
+    } catch (err) {
+      console.error(chalk.red('✗ 测试失败:'), err.message);
+      process.exit(1);
+    }
+  });
+
+const incidentCmd = program
+  .command('incident')
+  .description('事件(故障/维护)管理');
+
+incidentCmd
+  .command('create')
+  .description('创建新事件')
+  .requiredOption('-t, --title <title>', '事件标题')
+  .option('-s, --severity <severity>', '严重程度: critical/major/minor/info', 'major')
+  .option('-a, --affected-targets <targets>', '影响目标名称，逗号分隔')
+  .option('-d, --description <description>', '事件描述/初始更新')
+  .action(async (options) => {
+    try {
+      await db.init();
+      await incidentManager.create(options);
+      await db.close();
+    } catch (err) {
+      console.error(chalk.red('✗ 创建失败:'), err.message);
+      process.exit(1);
+    }
+  });
+
+incidentCmd
+  .command('update <id>')
+  .description('更新事件')
+  .option('-t, --title <title>', '更新标题')
+  .option('-s, --severity <severity>', '更新严重程度')
+  .option('--status <status>', '更新状态: investigating/identified/monitoring/resolved')
+  .option('-a, --affected-targets <targets>', '更新影响目标')
+  .option('-m, --message <message>', '状态更新消息')
+  .action(async (id, options) => {
+    try {
+      await db.init();
+      await incidentManager.update(id, options);
+      await db.close();
+    } catch (err) {
+      console.error(chalk.red('✗ 更新失败:'), err.message);
+      process.exit(1);
+    }
+  });
+
+incidentCmd
+  .command('close <id>')
+  .description('关闭(解决)事件')
+  .option('-m, --message <message>', '关闭消息')
+  .action(async (id, options) => {
+    try {
+      await db.init();
+      await incidentManager.close(id, options.message);
+      await db.close();
+    } catch (err) {
+      console.error(chalk.red('✗ 关闭失败:'), err.message);
+      process.exit(1);
+    }
+  });
+
+incidentCmd
+  .command('list')
+  .description('列出所有事件')
+  .option('-s, --status <status>', '按状态过滤')
+  .option('-d, --details', '显示未解决事件的详细信息')
+  .action(async (options) => {
+    try {
+      await db.init();
+      await incidentManager.list(options.status, options.details);
+      await db.close();
+    } catch (err) {
+      console.error(chalk.red('✗ 查询失败:'), err.message);
+      process.exit(1);
+    }
+  });
+
+incidentCmd
+  .command('show <id>')
+  .description('显示事件详情')
+  .action(async (id) => {
+    try {
+      await db.init();
+      await incidentManager.showDetails(id);
+      await db.close();
+    } catch (err) {
+      console.error(chalk.red('✗ 查询失败:'), err.message);
+      process.exit(1);
+    }
+  });
+
+const statusPageCmd = program
+  .command('status-page')
+  .description('生成状态页面');
+
+statusPageCmd
+  .command('generate')
+  .description('生成静态HTML状态页面')
+  .option('-o, --output <file>', '输出文件路径', 'status.html')
+  .action(async (options) => {
+    try {
+      await db.init();
+      await statusPage.generate(options.output);
+      await db.close();
+    } catch (err) {
+      console.error(chalk.red('✗ 生成失败:'), err.message);
+      process.exit(1);
+    }
+  });
+
+statusPageCmd
+  .command('serve')
+  .description('启动本地HTTP服务提供实时状态页(端口9412)')
+  .action(async () => {
+    try {
+      await db.init();
+      await statusPage.serve();
+
+      process.on('SIGINT', async () => {
+        console.log(chalk.yellow('\n\n正在停止状态页面服务...'));
+        statusPage.stop();
+        await db.close();
+        process.exit(0);
+      });
+
+      process.on('SIGTERM', async () => {
+        statusPage.stop();
+        await db.close();
+        process.exit(0);
+      });
+
+    } catch (err) {
+      console.error(chalk.red('✗ 启动失败:'), err.message);
+      await db.close();
+      process.exit(1);
+    }
+  });
+
+const transactionCmd = program
+  .command('transaction')
+  .description('多步骤事务检测管理');
+
+transactionCmd
+  .command('add')
+  .description('创建新事务')
+  .requiredOption('-n, --name <name>', '事务名称')
+  .option('-d, --description <desc>', '事务描述')
+  .option('-i, --interval <seconds>', '检测间隔秒数', '300')
+  .option('-t, --timeout <seconds>', '超时时间秒数', '30')
+  .option('-f, --alert-fail-count <count>', '连续失败告警次数', '2')
+  .option('-e, --environment <env>', '环境', 'prod')
+  .action(async (options) => {
+    try {
+      await db.init();
+      await transactionManager.add(options);
+      await db.close();
+    } catch (err) {
+      console.error(chalk.red('✗ 创建失败:'), err.message);
+      process.exit(1);
+    }
+  });
+
+transactionCmd
+  .command('add-step <transaction>')
+  .description('添加事务步骤')
+  .requiredOption('-n, --name <name>', '步骤名称')
+  .option('-m, --method <method>', 'HTTP方法', 'GET')
+  .requiredOption('-u, --url <url>', '请求URL')
+  .option('-h, --headers <json>', '请求头(JSON格式)')
+  .option('-b, --body <body>', '请求体')
+  .option('-s, --expected-status <code>', '预期状态码', '200')
+  .option('-k, --expected-keyword <keyword>', '预期响应关键词')
+  .option('-x, --extract <json>', '提取变量(JSON格式，如{"token":"data.access_token"})')
+  .action(async (transaction, options) => {
+    try {
+      await db.init();
+      await transactionManager.addStep(transaction, options);
+      await db.close();
+    } catch (err) {
+      console.error(chalk.red('✗ 添加步骤失败:'), err.message);
+      process.exit(1);
+    }
+  });
+
+transactionCmd
+  .command('list')
+  .description('列出所有事务')
+  .option('-e, --environment <env>', '按环境过滤')
+  .option('-d, --details', '显示详细信息')
+  .action(async (options) => {
+    try {
+      await db.init();
+      await transactionManager.list(options.environment, options.details);
+      await db.close();
+    } catch (err) {
+      console.error(chalk.red('✗ 查询失败:'), err.message);
+      process.exit(1);
+    }
+  });
+
+transactionCmd
+  .command('show <transaction>')
+  .description('显示事务详情')
+  .action(async (transaction) => {
+    try {
+      let txId;
+      if (/^\d+$/.test(transaction)) {
+        txId = parseInt(transaction);
+      } else {
+        const tx = await db.getTransactionByName(transaction);
+        if (!tx) throw new Error(`事务不存在: ${transaction}`);
+        txId = tx.id;
+      }
+      await db.init();
+      await transactionManager.showDetails(txId);
+      await db.close();
+    } catch (err) {
+      console.error(chalk.red('✗ 查询失败:'), err.message);
+      process.exit(1);
+    }
+  });
+
+transactionCmd
+  .command('remove <transaction>')
+  .description('删除事务(ID或名称)')
+  .action(async (transaction) => {
+    try {
+      await db.init();
+      await transactionManager.remove(transaction);
+      await db.close();
+    } catch (err) {
+      console.error(chalk.red('✗ 删除失败:'), err.message);
+      process.exit(1);
+    }
+  });
+
+transactionCmd
+  .command('run <transaction>')
+  .description('执行单次事务检测')
+  .action(async (transaction) => {
+    try {
+      let txId;
+      if (/^\d+$/.test(transaction)) {
+        txId = parseInt(transaction);
+      } else {
+        await db.init();
+        const tx = await db.getTransactionByName(transaction);
+        if (!tx) throw new Error(`事务不存在: ${transaction}`);
+        txId = tx.id;
+        await db.close();
+      }
+      await db.init();
+      await transactionManager.runOnceById(txId);
+      await db.close();
+    } catch (err) {
+      console.error(chalk.red('✗ 执行失败:'), err.message);
+      process.exit(1);
+    }
+  });
+
+const originalStartAction = program.commands.find(c => c.name() === 'start').action;
+program.commands.find(c => c.name() === 'start').action(async (options) => {
+  try {
+    await db.init();
+    
+    const targets = await db.getTargets(options.environment);
+    const transactions = await db.getTransactions(options.environment);
+    
+    if (targets.length === 0 && transactions.length === 0) {
+      console.log(chalk.yellow('未找到监测目标或事务，请先使用 add 命令添加或使用 init 初始化示例数据'));
+      await db.close();
+      process.exit(0);
+    }
+
+    if (options.once) {
+      console.log(chalk.cyan('执行单次检测...\n'));
+      
+      const targetResults = await checkEngine.runOnce(options.environment);
+      for (const { target, result } of targetResults) {
+        const status = result.success 
+          ? chalk.green(`✓ ${result.response_time}ms`)
+          : chalk.red(`✗ ${result.error_message || '失败'}`);
+        console.log(`  ${target.name}: ${status}`);
+      }
+
+      const txResults = await transactionManager.runOnce(options.environment);
+      for (const { transaction, result } of txResults) {
+        const status = result.success 
+          ? chalk.green(`✓ ${result.total_time}ms`)
+          : chalk.red(`✗ ${result.error_message || '失败'}`);
+        console.log(`  [事务] ${transaction.name}: ${status}`);
+      }
+      
+      await db.close();
+      process.exit(0);
+    }
+
+    console.log(chalk.bold.cyan('\n=== UpMon 监测服务启动 ===\n'));
+    console.log(chalk.gray(`启动时间: ${dayjs().format('YYYY-MM-DD HH:mm:ss')}`));
+    console.log(chalk.gray(`告警日志: ${alertManager.getAlertLogPath()}\n`));
+
+    await checkEngine.startAll(options.environment);
+    await transactionManager.startAll(options.environment);
+
+    process.on('SIGINT', async () => {
+      console.log(chalk.yellow('\n\n正在停止监测服务...'));
+      checkEngine.stopAll();
+      transactionManager.stopAll();
+      await db.close();
+      process.exit(0);
+    });
+
+    process.on('SIGTERM', async () => {
+      checkEngine.stopAll();
+      transactionManager.stopAll();
+      await db.close();
+      process.exit(0);
+    });
+
+  } catch (err) {
+    console.error(chalk.red('✗ 启动失败:'), err.message);
+    await db.close();
+    process.exit(1);
+  }
+});
 
 program.parseAsync(process.argv).catch(err => {
   console.error(chalk.red('✗ 错误:'), err.message);
