@@ -1,0 +1,58 @@
+environment: all
+exportedAt: '2026-06-08T03:55:01.010Z'
+targets:
+  - name: Example官网
+    url: https://example.com
+    interval: 60
+    timeout: 10
+    expected_status: 200
+    expected_keyword: Example Domain
+    alert_fail_count: 3
+    response_time_threshold: 2000
+    ssl_alert_days: 7
+    environment: prod
+    enabled: true
+  - name: HTTPBin测试
+    url: https://httpbin.org/status/200
+    interval: 120
+    timeout: 15
+    expected_status: 200
+    expected_keyword: null
+    alert_fail_count: 3
+    response_time_threshold: 3000
+    ssl_alert_days: 7
+    environment: staging
+    enabled: true
+  - name: JSONPlaceholder
+    url: https://jsonplaceholder.typicode.com/todos/1
+    interval: 150
+    timeout: 10
+    expected_status: 200
+    expected_keyword: delectus aut autem
+    alert_fail_count: 3
+    response_time_threshold: 2000
+    ssl_alert_days: 14
+    environment: staging
+    enabled: true
+  - name: Mock超时服务
+    url: https://httpbin.org/delay/30
+    interval: 180
+    timeout: 5
+    expected_status: 200
+    expected_keyword: null
+    alert_fail_count: 2
+    response_time_threshold: null
+    ssl_alert_days: 7
+    environment: dev
+    enabled: true
+  - name: Postman Echo
+    url: https://postman-echo.com/get
+    interval: 90
+    timeout: 10
+    expected_status: 200
+    expected_keyword: postman-echo
+    alert_fail_count: 3
+    response_time_threshold: 2500
+    ssl_alert_days: 7
+    environment: prod
+    enabled: true
